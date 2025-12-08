@@ -16,7 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <time.h>
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <winsock2.h>
@@ -48,7 +47,7 @@ static const size_t supported_cities_count = sizeof(supported_cities)/sizeof(sup
 /* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
-        if (tolower(*a) != tolower(*b)) return 0;
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
     }
     return *a == *b;
 }
@@ -106,8 +105,8 @@ int main(int argc, char* argv[]) {
     input[strcspn(input, "\r\n")] = 0;
 
     char rtype;
-    char city[CITY_NAME_LEN+1];
-    if (sscanf(input, " %c %31[^\n]", &rtype, city) != 2) {
+    char city[CITY_NAME_LEN+1] = {0};
+    if (sscanf(input, " %c %32[^\n]", &rtype, city) != 2) {
         printf("Richiesta non valida\n");
         CLOSESOCK(sockfd);
         return 0;
@@ -143,7 +142,10 @@ int main(int argc, char* argv[]) {
     // Prepara pacchetto da inviare
     unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
     reqbuf[0] = (unsigned char)rtype;
-    strncpy((char*)&reqbuf[1], city, CITY_NAME_LEN);
+    // Copia solo i caratteri effettivi, evitando warning
+    size_t len = strlen(city);
+    if (len > CITY_NAME_LEN) len = CITY_NAME_LEN;
+    memcpy(&reqbuf[1], city, len);
 
     if (sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
                (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {

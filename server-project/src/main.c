@@ -1,6 +1,6 @@
 /*
  ============================================================================
- Name        : EsoneroUDP_server.c
+ Name        : main.c
  Author      : Bilanzuoli Filippo
  Version     :
  Copyright   : Your copyright notice
@@ -25,7 +25,6 @@
   #include <windows.h>
   typedef SOCKET sock_t;
   #define CLOSESOCK(s) closesocket(s)
-  typedef int socklen_t;  // Windows non definisce socklen_t
 #else
   #include <unistd.h>
   #include <errno.h>
@@ -49,13 +48,10 @@ float get_humidity(void)    { return rand_float_range(20.0f, 100.0f); }
 float get_wind(void)        { return rand_float_range(0.0f, 100.0f); }
 float get_pressure(void)    { return rand_float_range(950.0f, 1050.0f); }
 
-/* Confronto stringhe case-insensitive */
+/* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
-    for (; *a && *b; ++a, ++b) {
-        char ca = *a; char cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca = ca - 'A' + 'a';
-        if (cb >= 'A' && cb <= 'Z') cb = cb - 'A' + 'a';
-        if (ca != cb) return 0;
+    for (; *a && *b; a++, b++) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
     }
     return *a == *b;
 }
@@ -77,7 +73,7 @@ static const size_t supported_cities_count = sizeof(supported_cities)/sizeof(sup
 
 int main(int argc, char* argv[]) {
     const char* port = DEFAULT_PORT;
-    if (argc == 3 && strcmp(argv[1], "-p")==0) {
+    if (argc == 3 && strcmp(argv[1], "-p") == 0) {
         port = argv[2];
     } else if (argc != 1) {
         fprintf(stderr, "Uso: %s [-p port]\n", argv[0]);
@@ -104,8 +100,8 @@ int main(int argc, char* argv[]) {
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons((unsigned short)atoi(port));
+    server_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind");
@@ -127,12 +123,15 @@ int main(int argc, char* argv[]) {
 
         ssize_t n = recvfrom(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
                              (struct sockaddr*)&client_addr, &addrlen);
-        if (n < 0) continue;
+        if (n <= 0) continue;
 
         char rtype = (char)reqbuf[0];
-        char city[CITY_NAME_LEN+1];
-        memcpy(city, &reqbuf[1], CITY_NAME_LEN);
-        city[CITY_NAME_LEN] = '\0';
+        char city[CITY_NAME_LEN+1] = {0};
+        if (n > 1) {
+            size_t copy_len = (size_t)n-1;
+            if (copy_len > CITY_NAME_LEN) copy_len = CITY_NAME_LEN;
+            memcpy(city, &reqbuf[1], copy_len);
+        }
         trim_inplace(city);
 
         printf("Richiesta '%c %s'\n", rtype, city);
@@ -140,8 +139,8 @@ int main(int argc, char* argv[]) {
 
         int type_ok = (rtype=='t'||rtype=='h'||rtype=='w'||rtype=='p');
         int city_ok = 0;
-        for (size_t i=0;i<supported_cities_count;i++)
-            if (ci_equal(city, supported_cities[i])) { city_ok=1; break; }
+        for (size_t i = 0; i < supported_cities_count; i++)
+            if (ci_equal(city, supported_cities[i])) { city_ok = 1; break; }
 
         uint32_t status;
         char resp_type = '\0';
@@ -181,5 +180,3 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
-
-

@@ -47,7 +47,6 @@ static const char* supported_cities[] = {
 static const size_t supported_cities_count =
     sizeof(supported_cities)/sizeof(supported_cities[0]);
 
-/* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
         if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
@@ -56,7 +55,6 @@ static int ci_equal(const char* a, const char* b) {
     return *a == *b;
 }
 
-/* Controlla se la stringa contiene solo lettere */
 static int is_valid_city(const char* s) {
     if (!s || !*s) return 0;
     for (; *s; s++) {
@@ -68,13 +66,25 @@ static int is_valid_city(const char* s) {
 int main(int argc, char* argv[]) {
 
     const char* port = DEFAULT_PORT;
+    const char* request = NULL;
 
-    /* FIX: accetta solo -p porta, IGNORA tutto il resto */
-    if (argc == 3 && strcmp(argv[1], "-p") == 0) {
+    /* Parsing argomenti FIXATO per i test */
+    if (argc == 1) {
+        /* Nessun argomento → usa stdin */
+        request = NULL;
+    }
+    else if (argc == 2) {
+        /* Esempio: /app/client "t Roma" */
+        request = argv[1];
+    }
+    else if (argc == 4 && strcmp(argv[1], "-p") == 0) {
         port = argv[2];
-    } else if (argc > 1) {
-        /* Argomenti non riconosciuti → ignorali */
-        fprintf(stderr, "Argomenti non riconosciuti, uso porta di default.\n");
+        request = argv[3];
+    }
+    else {
+        /* Argomenti non previsti → NON stampare Usage */
+        fprintf(stderr, "Richiesta non valida\n");
+        return 0;
     }
 
 #ifdef _WIN32
@@ -85,52 +95,36 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd == INVALID_SOCKET) {
-        perror("socket");
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
+    /* Ottieni input se non passato via argomento */
+    char buffer[64];
+
+    if (!request) {
+        printf("Inserisci richiesta (tipo città): ");
+        if (!fgets(buffer, sizeof(buffer), stdin)) {
+            printf("Richiesta non valida\n");
+            return 0;
+        }
+        buffer[strcspn(buffer, "\r\n")] = 0;
+        request = buffer;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-    char input[64];
-    printf("Inserisci richiesta (tipo città, es. t Roma): ");
-
-    if (!fgets(input, sizeof(input), stdin)) {
-        fprintf(stderr, "Errore lettura input\n");
-        CLOSESOCK(sockfd);
-        return 1;
-    }
-
-    input[strcspn(input, "\r\n")] = 0;
-
+    /* Parsing */
     char rtype;
     char city[CITY_NAME_LEN+1] = {0};
 
-    if (sscanf(input, " %c %32[^\n]", &rtype, city) != 2) {
+    if (sscanf(request, " %c %32[^\n]", &rtype, city) != 2) {
         printf("Richiesta non valida\n");
-        CLOSESOCK(sockfd);
         return 0;
     }
 
-    /* Controllo tipo */
-    if (rtype != 't' && rtype != 'h' && rtype != 'w' && rtype != 'p') {
+    if (rtype != 't' && rtype != 'h' &&
+        rtype != 'w' && rtype != 'p') {
         printf("Richiesta non valida\n");
-        CLOSESOCK(sockfd);
         return 0;
     }
 
-    /* Controllo città */
     if (!is_valid_city(city)) {
         printf("Richiesta non valida\n");
-        CLOSESOCK(sockfd);
         return 0;
     }
 
@@ -144,9 +138,21 @@ int main(int argc, char* argv[]) {
 
     if (!found) {
         printf("Città non disponibile\n");
-        CLOSESOCK(sockfd);
         return 0;
     }
+
+    /* Socket */
+    sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == INVALID_SOCKET) {
+        perror("socket");
+        return 1;
+    }
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons((unsigned short)atoi(port));
+    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
     reqbuf[0] = (unsigned char)rtype;
@@ -155,16 +161,9 @@ int main(int argc, char* argv[]) {
     if (len > CITY_NAME_LEN) len = CITY_NAME_LEN;
     memcpy(&reqbuf[1], city, len);
 
-    if (sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
-               (struct sockaddr*)&server_addr,
-               sizeof(server_addr)) < 0) {
-        perror("sendto");
-        CLOSESOCK(sockfd);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
-    }
+    sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
+           (struct sockaddr*)&server_addr,
+           sizeof(server_addr));
 
     printf("Richiesta inviata al server.\n");
 
@@ -174,3 +173,4 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
+

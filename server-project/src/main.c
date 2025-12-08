@@ -39,6 +39,8 @@
   #define CLOSESOCK(s) close(s)
 #endif
 
+#define CITY_NAME_LEN 64
+
 /* Funzioni simulate per valori meteo */
 float rand_float_range(float lo, float hi) {
     float r = (float)rand() / (float)RAND_MAX;
@@ -51,9 +53,9 @@ float get_pressure(void)    { return rand_float_range(950.0f, 1050.0f); }
 
 /* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
-    for (; *a && *b; a++, b++) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
-    }
+    for (; *a && *b; a++, b++)
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+            return 0;
     return *a == *b;
 }
 
@@ -68,9 +70,19 @@ static void trim_inplace(char* s) {
 
 /* Città supportate */
 static const char* supported_cities[] = {
-    "Bari","Roma","Milano","Napoli","Torino","Palermo","Genova","Bologna","Firenze","Venezia"
+    "Bari","Roma","Milano","Napoli","Torino",
+    "Palermo","Genova","Bologna","Firenze","Venezia"
 };
-static const size_t supported_cities_count = sizeof(supported_cities)/sizeof(supported_cities[0]);
+static const size_t supported_cities_count =
+    sizeof(supported_cities)/sizeof(supported_cities[0]);
+
+/* Controlla se tutti i caratteri sono alfabetici */
+static int is_alpha_string(const char* s) {
+    if (!s || !*s) return 0;
+    for (; *s; s++)
+        if (!isalpha((unsigned char)*s)) return 0;
+    return 1;
+}
 
 int main(int argc, char* argv[]) {
     const char* port = DEFAULT_PORT;
@@ -102,7 +114,7 @@ int main(int argc, char* argv[]) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // risponde a localhost
 
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind");
@@ -114,7 +126,6 @@ int main(int argc, char* argv[]) {
     }
 
     srand((unsigned int)time(NULL));
-
     printf("Server UDP in ascolto sulla porta %s...\n", port);
 
     for (;;) {
@@ -135,30 +146,28 @@ int main(int argc, char* argv[]) {
         }
         trim_inplace(city);
 
-        printf("Richiesta '%c %s'\n", rtype, city);
-        fflush(stdout);
-
         int type_ok = (rtype=='t'||rtype=='h'||rtype=='w'||rtype=='p');
+        int city_alpha = is_alpha_string(city);
         int city_ok = 0;
-        for (size_t i = 0; i < supported_cities_count; i++)
+        for (size_t i=0; i<supported_cities_count; i++)
             if (ci_equal(city, supported_cities[i])) { city_ok = 1; break; }
 
         uint32_t status;
         char resp_type = '\0';
         float value = 0.0f;
 
-        if (!type_ok) {
+        if (!type_ok || !city_alpha)
             status = STATUS_INVALID_REQUEST;
-        } else if (!city_ok) {
+        else if (!city_ok)
             status = STATUS_CITY_UNAVAILABLE;
-        } else {
+        else {
             status = STATUS_SUCCESS;
             resp_type = rtype;
             switch (rtype) {
-                case 't': value = get_temperature(); break;
-                case 'h': value = get_humidity(); break;
-                case 'w': value = get_wind(); break;
-                case 'p': value = get_pressure(); break;
+                case 't': value=get_temperature(); break;
+                case 'h': value=get_humidity(); break;
+                case 'w': value=get_wind(); break;
+                case 'p': value=get_pressure(); break;
             }
         }
 
@@ -168,8 +177,7 @@ int main(int argc, char* argv[]) {
         respbuf[4] = resp_type;
         uint32_t value_u32;
         memcpy(&value_u32, &value, sizeof(value_u32));
-        value_u32 = htonl(value_u32);
-        memcpy(&respbuf[5], &value_u32, 4);
+        memcpy(&respbuf[5], &value_u32, 4); // invio float puro
 
         sendto(sockfd, (char*)respbuf, sizeof(respbuf), 0,
                (struct sockaddr*)&client_addr, addrlen);

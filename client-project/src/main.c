@@ -70,11 +70,9 @@ int main(int argc, char* argv[]) {
 
     /* Parsing argomenti FIXATO per i test */
     if (argc == 1) {
-        /* Nessun argomento â†’ usa stdin */
         request = NULL;
     }
     else if (argc == 2) {
-        /* Esempio: /app/client "t Roma" */
         request = argv[1];
     }
     else if (argc == 4 && strcmp(argv[1], "-p") == 0) {
@@ -82,7 +80,7 @@ int main(int argc, char* argv[]) {
         request = argv[3];
     }
     else {
-        /* Argomenti non previsti â†’ NON stampare Usage */
+        /* Argomenti non previsti */
         fprintf(stderr, "Richiesta non valida\n");
         return 0;
     }
@@ -95,11 +93,10 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    /* Ottieni input se non passato via argomento */
     char buffer[64];
 
     if (!request) {
-        printf("Inserisci richiesta (tipo cittÃ ): ");
+        printf("Inserisci richiesta (tipo città): ");
         if (!fgets(buffer, sizeof(buffer), stdin)) {
             printf("Richiesta non valida\n");
             return 0;
@@ -108,7 +105,6 @@ int main(int argc, char* argv[]) {
         request = buffer;
     }
 
-    /* Parsing */
     char rtype;
     char city[CITY_NAME_LEN+1] = {0};
 
@@ -117,17 +113,18 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (rtype != 't' && rtype != 'h' &&
-        rtype != 'w' && rtype != 'p') {
+    if (rtype != 't' && rtype != 'h' && rtype != 'w' && rtype != 'p') {
         printf("Richiesta non valida\n");
         return 0;
     }
 
+    /* Controllo caratteri validi nella città */
     if (!is_valid_city(city)) {
         printf("Richiesta non valida\n");
         return 0;
     }
 
+    /* Controllo se la città è supportata */
     int found = 0;
     for (size_t i = 0; i < supported_cities_count; i++) {
         if (ci_equal(city, supported_cities[i])) {
@@ -135,9 +132,8 @@ int main(int argc, char* argv[]) {
             break;
         }
     }
-
     if (!found) {
-        printf("CittÃ  non disponibile\n");
+        printf("Città non disponibile\n");
         return 0;
     }
 
@@ -161,9 +157,16 @@ int main(int argc, char* argv[]) {
     if (len > CITY_NAME_LEN) len = CITY_NAME_LEN;
     memcpy(&reqbuf[1], city, len);
 
-    sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
-           (struct sockaddr*)&server_addr,
-           sizeof(server_addr));
+    if (sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
+               (struct sockaddr*)&server_addr,
+               sizeof(server_addr)) < 0) {
+        perror("sendto");
+        CLOSESOCK(sockfd);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 1;
+    }
 
     printf("Richiesta inviata al server.\n");
 
@@ -173,4 +176,3 @@ int main(int argc, char* argv[]) {
 #endif
     return 0;
 }
-

@@ -39,8 +39,6 @@
   #define CLOSESOCK(s) close(s)
 #endif
 
-#define CITY_NAME_LEN 64
-
 /* Funzioni simulate per valori meteo */
 float rand_float_range(float lo, float hi) {
     float r = (float)rand() / (float)RAND_MAX;
@@ -68,14 +66,6 @@ static void trim_inplace(char* s) {
     while (len > 0 && s[len-1] == ' ') { s[len-1] = '\0'; len--; }
 }
 
-/* Città supportate */
-static const char* supported_cities[] = {
-    "Bari","Roma","Milano","Napoli","Torino",
-    "Palermo","Genova","Bologna","Firenze","Venezia"
-};
-static const size_t supported_cities_count =
-    sizeof(supported_cities)/sizeof(supported_cities[0]);
-
 /* Controlla se tutti i caratteri sono alfabetici */
 static int is_alpha_string(const char* s) {
     if (!s || !*s) return 0;
@@ -83,6 +73,14 @@ static int is_alpha_string(const char* s) {
         if (!isalpha((unsigned char)*s)) return 0;
     return 1;
 }
+
+/* Città supportate */
+static const char* supported_cities[] = {
+    "Bari","Roma","Milano","Napoli","Torino",
+    "Palermo","Genova","Bologna","Firenze","Venezia"
+};
+static const size_t supported_cities_count =
+    sizeof(supported_cities)/sizeof(supported_cities[0]);
 
 int main(int argc, char* argv[]) {
     const char* port = DEFAULT_PORT;
@@ -114,7 +112,7 @@ int main(int argc, char* argv[]) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // risponde a localhost
+    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind");
@@ -140,7 +138,7 @@ int main(int argc, char* argv[]) {
         char rtype = (char)reqbuf[0];
         char city[CITY_NAME_LEN+1] = {0};
         if (n > 1) {
-            size_t copy_len = (size_t)n-1;
+            size_t copy_len = (size_t)n - 1;
             if (copy_len > CITY_NAME_LEN) copy_len = CITY_NAME_LEN;
             memcpy(city, &reqbuf[1], copy_len);
         }
@@ -149,7 +147,7 @@ int main(int argc, char* argv[]) {
         int type_ok = (rtype=='t'||rtype=='h'||rtype=='w'||rtype=='p');
         int city_alpha = is_alpha_string(city);
         int city_ok = 0;
-        for (size_t i=0; i<supported_cities_count; i++)
+        for (size_t i = 0; i < supported_cities_count; i++)
             if (ci_equal(city, supported_cities[i])) { city_ok = 1; break; }
 
         uint32_t status;
@@ -164,10 +162,10 @@ int main(int argc, char* argv[]) {
             status = STATUS_SUCCESS;
             resp_type = rtype;
             switch (rtype) {
-                case 't': value=get_temperature(); break;
-                case 'h': value=get_humidity(); break;
-                case 'w': value=get_wind(); break;
-                case 'p': value=get_pressure(); break;
+                case 't': value = get_temperature(); break;
+                case 'h': value = get_humidity(); break;
+                case 'w': value = get_wind(); break;
+                case 'p': value = get_pressure(); break;
             }
         }
 
@@ -177,7 +175,7 @@ int main(int argc, char* argv[]) {
         respbuf[4] = resp_type;
         uint32_t value_u32;
         memcpy(&value_u32, &value, sizeof(value_u32));
-        memcpy(&respbuf[5], &value_u32, 4); // invio float puro
+        memcpy(&respbuf[5], &value_u32, 4);
 
         sendto(sockfd, (char*)respbuf, sizeof(respbuf), 0,
                (struct sockaddr*)&client_addr, addrlen);

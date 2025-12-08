@@ -8,7 +8,9 @@
  ============================================================================
  */
 
+#ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +25,7 @@
   #include <windows.h>
   typedef SOCKET sock_t;
   #define CLOSESOCK(s) closesocket(s)
+  typedef int socklen_t;  // Windows non definisce socklen_t
 #else
   #include <unistd.h>
   #include <errno.h>
@@ -36,7 +39,7 @@
   #define CLOSESOCK(s) close(s)
 #endif
 
-// Funzioni di generazione dati meteo
+/* Funzioni simulate per valori meteo */
 float rand_float_range(float lo, float hi) {
     float r = (float)rand() / (float)RAND_MAX;
     return lo + r * (hi - lo);
@@ -46,7 +49,7 @@ float get_humidity(void)    { return rand_float_range(20.0f, 100.0f); }
 float get_wind(void)        { return rand_float_range(0.0f, 100.0f); }
 float get_pressure(void)    { return rand_float_range(950.0f, 1050.0f); }
 
-// Comparazione case-insensitive
+/* Confronto stringhe case-insensitive */
 static int ci_equal(const char* a, const char* b) {
     for (; *a && *b; ++a, ++b) {
         char ca = *a; char cb = *b;
@@ -57,7 +60,7 @@ static int ci_equal(const char* a, const char* b) {
     return *a == *b;
 }
 
-// Trim stringa in-place
+/* Rimuove spazi iniziali e finali */
 static void trim_inplace(char* s) {
     char *p = s;
     while (*p == ' ') p++;
@@ -66,48 +69,19 @@ static void trim_inplace(char* s) {
     while (len > 0 && s[len-1] == ' ') { s[len-1] = '\0'; len--; }
 }
 
-// Città supportate
+/* Città supportate */
 static const char* supported_cities[] = {
     "Bari","Roma","Milano","Napoli","Torino","Palermo","Genova","Bologna","Firenze","Venezia"
 };
 static const size_t supported_cities_count = sizeof(supported_cities)/sizeof(supported_cities[0]);
 
-#ifdef _WIN32
-const char* inet_ntop_win(int af, const void* src, char* dst, size_t size) {
-    if (af == AF_INET) {
-        struct sockaddr_in sa;
-        memset(&sa, 0, sizeof(sa));
-        sa.sin_family = AF_INET;
-        memcpy(&sa.sin_addr, src, sizeof(struct in_addr));
-        DWORD sz = (DWORD)size;
-        if (WSAAddressToStringA((LPSOCKADDR)&sa, sizeof(sa), NULL, dst, &sz) != 0)
-            return NULL;
-    } else if (af == AF_INET6) {
-        struct sockaddr_in6 sa6;
-        memset(&sa6, 0, sizeof(sa6));
-        sa6.sin6_family = AF_INET6;
-        memcpy(&sa6.sin6_addr, src, sizeof(struct in6_addr));
-        DWORD sz = (DWORD)size;
-        if (WSAAddressToStringA((LPSOCKADDR)&sa6, sizeof(sa6), NULL, dst, &sz) != 0)
-            return NULL;
-    }
-    return dst;
-}
-#define inet_ntop inet_ntop_win
-#endif
-
 int main(int argc, char* argv[]) {
     const char* port = DEFAULT_PORT;
-
-    // Parsing argomenti
-    for (int i=1;i<argc;i++){
-        if (strcmp(argv[i], "-p")==0 && i+1<argc) {
-            port = argv[i+1];
-            i++;
-        } else {
-            fprintf(stderr, "Uso: %s [-p port]\n", argv[0]);
-            return 1;
-        }
+    if (argc == 3 && strcmp(argv[1], "-p")==0) {
+        port = argv[2];
+    } else if (argc != 1) {
+        fprintf(stderr, "Uso: %s [-p port]\n", argv[0]);
+        return 1;
     }
 
 #ifdef _WIN32
@@ -118,25 +92,24 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    // Creazione socket UDP
-    sock_t sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock == INVALID_SOCKET) {
-        fprintf(stderr, "Errore: impossibile creare socket\n");
+    sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == INVALID_SOCKET) {
+        perror("socket");
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)atoi(port));
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons((unsigned short)atoi(port));
 
-    if (bind(sock, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind");
-        CLOSESOCK(sock);
+        CLOSESOCK(sockfd);
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -146,35 +119,29 @@ int main(int argc, char* argv[]) {
     srand((unsigned int)time(NULL));
 
     printf("Server UDP in ascolto sulla porta %s...\n", port);
-    fflush(stdout);
 
     for (;;) {
         struct sockaddr_in client_addr;
-        int addrlen = sizeof(client_addr);
-        unsigned char reqbuf[1 + CITY_NAME_LEN];
+        socklen_t addrlen = sizeof(client_addr);
+        unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
 
-        int rec = recvfrom(sock, (char*)reqbuf, sizeof(reqbuf), 0,
-                           (struct sockaddr*)&client_addr, &addrlen);
-        if (rec <= 0) continue;
+        ssize_t n = recvfrom(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
+                             (struct sockaddr*)&client_addr, &addrlen);
+        if (n < 0) continue;
 
         char rtype = (char)reqbuf[0];
-        char citybuf[CITY_NAME_LEN+1];
-        memcpy(citybuf, &reqbuf[1], CITY_NAME_LEN);
-        citybuf[CITY_NAME_LEN] = '\0';
-        trim_inplace(citybuf);
+        char city[CITY_NAME_LEN+1];
+        memcpy(city, &reqbuf[1], CITY_NAME_LEN);
+        city[CITY_NAME_LEN] = '\0';
+        trim_inplace(city);
 
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
-
-        printf("Richiesta '%c %s' dal client ip %s\n", rtype, citybuf, client_ip);
+        printf("Richiesta '%c %s'\n", rtype, city);
         fflush(stdout);
 
-        // Validazione
-        int type_ok = (rtype=='t' || rtype=='h' || rtype=='w' || rtype=='p');
+        int type_ok = (rtype=='t'||rtype=='h'||rtype=='w'||rtype=='p');
         int city_ok = 0;
-        for (size_t i=0;i<supported_cities_count;i++) {
-            if (ci_equal(citybuf, supported_cities[i])) { city_ok = 1; break; }
-        }
+        for (size_t i=0;i<supported_cities_count;i++)
+            if (ci_equal(city, supported_cities[i])) { city_ok=1; break; }
 
         uint32_t status;
         char resp_type = '\0';
@@ -192,12 +159,10 @@ int main(int argc, char* argv[]) {
                 case 'h': value = get_humidity(); break;
                 case 'w': value = get_wind(); break;
                 case 'p': value = get_pressure(); break;
-                default: value = 0.0f; break;
             }
         }
 
-        // Serializzazione risposta
-        unsigned char respbuf[9];
+        unsigned char respbuf[9] = {0};
         uint32_t net_status = htonl(status);
         memcpy(respbuf, &net_status, 4);
         respbuf[4] = resp_type;
@@ -206,14 +171,15 @@ int main(int argc, char* argv[]) {
         value_u32 = htonl(value_u32);
         memcpy(&respbuf[5], &value_u32, 4);
 
-        sendto(sock, (const char*)respbuf, sizeof(respbuf), 0,
+        sendto(sockfd, (char*)respbuf, sizeof(respbuf), 0,
                (struct sockaddr*)&client_addr, addrlen);
     }
 
-    CLOSESOCK(sock);
+    CLOSESOCK(sockfd);
 #ifdef _WIN32
     WSACleanup();
 #endif
     return 0;
 }
+
 

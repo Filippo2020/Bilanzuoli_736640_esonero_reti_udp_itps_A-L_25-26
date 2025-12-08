@@ -12,9 +12,11 @@
 #define _WIN32_WINNT 0x0601
 #endif
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <winsock2.h>

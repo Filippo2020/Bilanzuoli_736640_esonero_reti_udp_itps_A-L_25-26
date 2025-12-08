@@ -12,11 +12,11 @@
 #define _WIN32_WINNT 0x0601
 #endif
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <winsock2.h>
@@ -41,14 +41,17 @@
 #define CITY_NAME_LEN 32
 
 static const char* supported_cities[] = {
-    "Bari","Roma","Milano","Napoli","Torino","Palermo","Genova","Bologna","Firenze","Venezia"
+    "Bari","Roma","Milano","Napoli","Torino","Palermo",
+    "Genova","Bologna","Firenze","Venezia"
 };
-static const size_t supported_cities_count = sizeof(supported_cities)/sizeof(supported_cities[0]);
+static const size_t supported_cities_count =
+    sizeof(supported_cities)/sizeof(supported_cities[0]);
 
 /* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+            return 0;
     }
     return *a == *b;
 }
@@ -63,12 +66,15 @@ static int is_valid_city(const char* s) {
 }
 
 int main(int argc, char* argv[]) {
+
     const char* port = DEFAULT_PORT;
+
+    /* FIX: accetta solo -p porta, IGNORA tutto il resto */
     if (argc == 3 && strcmp(argv[1], "-p") == 0) {
         port = argv[2];
-    } else if (argc != 1) {
-        fprintf(stderr, "Uso: %s [-p port]\n", argv[0]);
-        return 1;
+    } else if (argc > 1) {
+        /* Argomenti non riconosciuti ‚Üí ignorali */
+        fprintf(stderr, "Argomenti non riconosciuti, uso porta di default.\n");
     }
 
 #ifdef _WIN32
@@ -92,64 +98,66 @@ int main(int argc, char* argv[]) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // localhost
+    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     char input[64];
-    printf("Inserisci richiesta (tipo citt‡, es. t Roma): ");
+    printf("Inserisci richiesta (tipo citt√†, es. t Roma): ");
+
     if (!fgets(input, sizeof(input), stdin)) {
         fprintf(stderr, "Errore lettura input\n");
         CLOSESOCK(sockfd);
         return 1;
     }
 
-    // Rimuove newline
     input[strcspn(input, "\r\n")] = 0;
 
     char rtype;
     char city[CITY_NAME_LEN+1] = {0};
+
     if (sscanf(input, " %c %32[^\n]", &rtype, city) != 2) {
         printf("Richiesta non valida\n");
         CLOSESOCK(sockfd);
         return 0;
     }
 
-    // Controllo tipo
+    /* Controllo tipo */
     if (rtype != 't' && rtype != 'h' && rtype != 'w' && rtype != 'p') {
         printf("Richiesta non valida\n");
         CLOSESOCK(sockfd);
         return 0;
     }
 
-    // Controllo citt‡
+    /* Controllo citt√† */
     if (!is_valid_city(city)) {
         printf("Richiesta non valida\n");
         CLOSESOCK(sockfd);
         return 0;
     }
 
-    int city_found = 0;
+    int found = 0;
     for (size_t i = 0; i < supported_cities_count; i++) {
         if (ci_equal(city, supported_cities[i])) {
-            city_found = 1;
+            found = 1;
             break;
         }
     }
-    if (!city_found) {
-        printf("Citt‡ non disponibile\n");
+
+    if (!found) {
+        printf("Citt√† non disponibile\n");
         CLOSESOCK(sockfd);
         return 0;
     }
 
-    // Prepara pacchetto da inviare
     unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
     reqbuf[0] = (unsigned char)rtype;
-    // Copia solo i caratteri effettivi, evitando warning
+
     size_t len = strlen(city);
     if (len > CITY_NAME_LEN) len = CITY_NAME_LEN;
     memcpy(&reqbuf[1], city, len);
 
     if (sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
-               (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+               (struct sockaddr*)&server_addr,
+               sizeof(server_addr)) < 0) {
         perror("sendto");
         CLOSESOCK(sockfd);
 #ifdef _WIN32

@@ -8,187 +8,127 @@
  ============================================================================
  */
 
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
 #ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  #include <windows.h>
-  typedef SOCKET sock_t;
-  #define CLOSESOCK(s) closesocket(s)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+typedef SOCKET sock_t;
+#define CLOSESOCK closesocket
 #else
-  #include <unistd.h>
-  #include <errno.h>
-  #include <sys/types.h>
-  #include <sys/socket.h>
-  #include <netdb.h>
-  #include <arpa/inet.h>
-  #include <netinet/in.h>
-  typedef int sock_t;
-  #define INVALID_SOCKET (-1)
-  #define CLOSESOCK(s) close(s)
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+typedef int sock_t;
+#define CLOSESOCK close
+#define INVALID_SOCKET -1
 #endif
 
 #include "protocol.h"
 
-/* Città supportate */
-static const char* supported_cities[] = {
-    "Bari","Roma","Milano","Napoli","Torino","Palermo",
-    "Genova","Bologna","Firenze","Venezia"
-};
-static const size_t supported_cities_count =
-    sizeof(supported_cities)/sizeof(supported_cities[0]);
+#define BUF_SIZE 1024
 
-/* Confronto case-insensitive */
-static int ci_equal(const char* a, const char* b) {
-    for (; *a && *b; a++, b++) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
-            return 0;
-    }
-    return *a == *b;
-}
-
-/* Trim come nel server */
-static void trim_inplace(char* s) {
-    char *p = s;
-    while (*p == ' ') p++;
-    if (p != s) memmove(s, p, strlen(p)+1);
-
+/* Rimuove spazi e newline */
+void trim(char *s) {
     size_t len = strlen(s);
-    while (len > 0 && s[len-1] == ' ') {
-        s[len-1] = '\0';
-        len--;
-    }
+    while (len > 0 && (s[len-1] == '\n' || s[len-1] == ' '))
+        s[--len] = '\0';
+
+    int start = 0;
+    while (s[start] == ' ') start++;
+    if (start > 0) memmove(s, s + start, strlen(s) - start + 1);
 }
 
-/* Validazione città come quella del server (lettere + spazi) */
-static int is_valid_city(const char* s) {
-    if (!s || !*s) return 0;
-    for (; *s; s++) {
-        if (!isalpha((unsigned char)*s) && *s != ' ')
-            return 0;
+/* Rende spazi multipli â†’ uno */
+void normalize_spaces(char *str) {
+    char tmp[BUF_SIZE];
+    int j = 0, space = 0;
+    for (int i = 0; str[i]; i++) {
+        if (str[i] == ' ') {
+            if (!space) tmp[j++] = ' ';
+            space = 1;
+        } else {
+            tmp[j++] = str[i];
+            space = 0;
+        }
     }
-    return 1;
+    tmp[j] = '\0';
+    strcpy(str, tmp);
 }
 
-int main(int argc, char* argv[]) {
-
-    const char* port = DEFAULT_PORT;
-    const char* request = NULL;
-
-    /* Parsing argomenti */
-    if (argc == 1) {
-        request = NULL;
-    }
-    else if (argc == 2) {
-        request = argv[1];
-    }
-    else if (argc == 4 && strcmp(argv[1], "-p") == 0) {
-        port = argv[2];
-        request = argv[3];
-    }
-    else {
-        fprintf(stderr, "Richiesta non valida\n");
-        return 0;
-    }
+int main() {
 
 #ifdef _WIN32
     WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup failed\n");
-        return 1;
-    }
+    WSAStartup(MAKEWORD(2,2), &wsa);
 #endif
 
-    char buffer[64];
+    char city[CITY_NAME_LEN+1];
+    char type;
 
-    if (!request) {
-        printf("Inserisci richiesta (tipo città): ");
-        if (!fgets(buffer, sizeof(buffer), stdin)) {
-            printf("Richiesta non valida\n");
-            return 0;
-        }
-        buffer[strcspn(buffer, "\r\n")] = 0;
-        request = buffer;
-    }
+    printf("Tipo richiesta (t/h/w/p): ");
+    scanf(" %c", &type);
+    getchar(); // pulisce buffer
 
-    char rtype;
-    char city[CITY_NAME_LEN+1] = {0};
+    printf("Inserisci la cittÃ : ");
+    fgets(city, sizeof(city), stdin);
 
-    if (sscanf(request, " %c %32[^\n]", &rtype, city) != 2) {
-        printf("Richiesta non valida\n");
-        return 0;
-    }
+    trim(city);
+    normalize_spaces(city);
 
-    if (rtype != 't' && rtype != 'h' && rtype != 'w' && rtype != 'p') {
-        printf("Richiesta non valida\n");
-        return 0;
-    }
-
-    /* Trim come il server */
-    trim_inplace(city);
-
-    /* Controllo caratteri validi nella città (lettere + spazi) */
-    if (!is_valid_city(city)) {
-        printf("Richiesta non valida\n");
-        return 0;
-    }
-
-    /* Controllo se la città è supportata */
-    int found = 0;
-    for (size_t i = 0; i < supported_cities_count; i++) {
-        if (ci_equal(city, supported_cities[i])) {
-            found = 1;
-            break;
-        }
-    }
-    if (!found) {
-        printf("Città non disponibile\n");
-        return 0;
-    }
-
-    /* Creazione socket */
-    sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd == INVALID_SOCKET) {
+    sock_t sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == INVALID_SOCKET) {
         perror("socket");
         return 1;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    struct sockaddr_in serv;
+    memset(&serv, 0, sizeof(serv));
+    serv.sin_family = AF_INET;
+    serv.sin_port = htons(atoi(DEFAULT_PORT));
+    serv.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
-    reqbuf[0] = (unsigned char)rtype;
+    /* Pacchetto richiesta: 1 byte tipo + nome cittÃ  */
+    unsigned char req[1 + CITY_NAME_LEN] = {0};
+    req[0] = type;
+    strncpy((char*)&req[1], city, CITY_NAME_LEN);
 
-    size_t len = strlen(city);
-    if (len > CITY_NAME_LEN) len = CITY_NAME_LEN;
-    memcpy(&reqbuf[1], city, len);
+    sendto(sock, (char*)req, 1 + strlen(city), 0,
+           (struct sockaddr*)&serv, sizeof(serv));
 
-    if (sendto(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
-               (struct sockaddr*)&server_addr,
-               sizeof(server_addr)) < 0) {
-        perror("sendto");
-        CLOSESOCK(sockfd);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
+    /* Ricezione risposta */
+    unsigned char resp[9];
+    socklen_t slen = sizeof(serv);
+
+    int r = recvfrom(sock, (char*)resp, sizeof(resp), 0,
+                     (struct sockaddr*)&serv, &slen);
+
+    if (r == 9) {
+        uint32_t status = ntohl(*(uint32_t*)&resp[0]);
+        char rtype = resp[4];
+        float value;
+        memcpy(&value, &resp[5], 4);
+
+        if (status == STATUS_INVALID_REQUEST) {
+            printf("Richiesta non valida\n");
+        }
+        else if (status == STATUS_CITY_UNAVAILABLE) {
+            printf("CittÃ  non disponibile\n");
+        }
+        else if (status == STATUS_SUCCESS) {
+            if (rtype == 't') printf("Temperatura = %.2f\n", value);
+            else if (rtype == 'h') printf("UmiditÃ  = %.2f\n", value);
+            else if (rtype == 'w') printf("Vento = %.2f\n", value);
+            else if (rtype == 'p') printf("Pressione = %.2f\n", value);
+        }
     }
 
-    printf("Richiesta inviata al server.\n");
+    CLOSESOCK(sock);
 
-    CLOSESOCK(sockfd);
 #ifdef _WIN32
     WSACleanup();
 #endif

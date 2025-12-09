@@ -1,6 +1,6 @@
 /*
  ============================================================================
- Name        : main.c
+ Name        : server-project.c
  Author      : Bilanzuoli Filippo
  Version     :
  Copyright   : Your copyright notice
@@ -8,182 +8,179 @@
  ============================================================================
  */
 
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0601
-#endif
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <time.h>
 #include "protocol.h"
 
-#ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  #include <windows.h>
-  typedef SOCKET sock_t;
-  #define CLOSESOCK(s) closesocket(s)
-#else
-  #include <unistd.h>
-  #include <errno.h>
-  #include <sys/types.h>
-  #include <sys/socket.h>
-  #include <netdb.h>
-  #include <arpa/inet.h>
-  #include <netinet/in.h>
-  typedef int sock_t;
-  #define INVALID_SOCKET (-1)
-  #define CLOSESOCK(s) close(s)
+#if defined(_WIN32)
+#ifndef inet_ntop
+// Wrapper inet_ntop per Windows MinGW
+const char* inet_ntop(int af, const void* src, char* dst, socklen_t size) {
+    struct sockaddr_in sa;
+    ZeroMemory(&sa, sizeof(sa));
+    sa.sin_family = af;
+    memcpy(&sa.sin_addr, src, sizeof(struct in_addr));
+
+    DWORD dst_len = (DWORD)size;
+    if (WSAAddressToStringA((struct sockaddr*)&sa, sizeof(sa), NULL, dst, &dst_len) != 0) {
+        return NULL;
+    }
+    return dst;
+}
+#endif
 #endif
 
-/* Funzioni simulate per valori meteo */
-float rand_float_range(float lo, float hi) {
-    float r = (float)rand() / (float)RAND_MAX;
-    return lo + r * (hi - lo);
-}
-float get_temperature(void) { return rand_float_range(-10.0f, 40.0f); }
-float get_humidity(void)    { return rand_float_range(20.0f, 100.0f); }
-float get_wind(void)        { return rand_float_range(0.0f, 100.0f); }
-float get_pressure(void)    { return rand_float_range(950.0f, 1050.0f); }
-
-/* Confronto case-insensitive */
-static int ci_equal(const char* a, const char* b) {
-    for (; *a && *b; a++, b++)
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
-            return 0;
-    return *a == *b;
+float get_random_float(float min, float max) {
+    return min + (rand() / (float)RAND_MAX) * (max - min);
 }
 
-/* Rimuove spazi iniziali e finali */
-static void trim_inplace(char* s) {
-    char *p = s;
-    while (*p == ' ') p++;
-    if (p != s) memmove(s, p, strlen(p)+1);
-    size_t len = strlen(s);
-    while (len > 0 && s[len-1] == ' ') { s[len-1] = '\0'; len--; }
+float get_temperature() { return get_random_float(-10.0f, 40.0f); }
+float get_humidity()   { return get_random_float(20.0f, 100.0f); }
+float get_wind()       { return get_random_float(0.0f, 100.0f); }
+float get_pressure()   { return get_random_float(950.0f, 1050.0f); }
+
+int is_city_valid(const char* city) {
+    const char* valid_cities[] = {
+        "bari", "roma", "milano", "napoli", "torino",
+        "palermo", "genova", "bologna", "firenze", "venezia"
+    };
+    for (int i = 0; i < 10; i++) {
+        if (strcasecmp(city, valid_cities[i]) == 0) return 1;
+    }
+    return 0;
 }
 
-/* Controlla se tutti i caratteri sono alfabetici */
-static int is_alpha_string(const char* s) {
-    if (!s || !*s) return 0;
-    for (; *s; s++)
-        if (!isalpha((unsigned char)*s)) return 0;
-    return 1;
-}
+int main(int argc, char *argv[]) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    srand((unsigned int)time(NULL));
 
-/* Città supportate */
-static const char* supported_cities[] = {
-    "Bari","Roma","Milano","Napoli","Torino",
-    "Palermo","Genova","Bologna","Firenze","Venezia"
-};
-static const size_t supported_cities_count =
-    sizeof(supported_cities)/sizeof(supported_cities[0]);
-
-int main(int argc, char* argv[]) {
-    const char* port = DEFAULT_PORT;
+    int port = DEFAULT_PORT;
     if (argc == 3 && strcmp(argv[1], "-p") == 0) {
-        port = argv[2];
-    } else if (argc != 1) {
-        fprintf(stderr, "Uso: %s [-p port]\n", argv[0]);
-        return 1;
+        port = atoi(argv[2]);
     }
+    printf("Server avviato sulla porta %d\n", port);
 
-#ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup failed\n");
-        return 1;
+#if defined(_WIN32)
+    WSADATA wsa_data;
+    if (WSAStartup(MAKEWORD(2,2), &wsa_data) != 0) {
+        printf("Errore critico: WSAStartup fallita.\n");
+        return -1;
     }
 #endif
 
-    sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd == INVALID_SOCKET) {
-        perror("socket");
-#ifdef _WIN32
+    int server_socket = socket(PF_INET, SOCK_DGRAM, 0);
+    if (server_socket == INVALID_SOCKET) {
+        perror("Impossibile creare il socket");
+#if defined(_WIN32)
         WSACleanup();
 #endif
-        return 1;
+        return -1;
     }
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons((unsigned short)atoi(port));
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("bind");
-        CLOSESOCK(sockfd);
-#ifdef _WIN32
+    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        printf("Errore Bind. Porta occupata?\n");
+        close(server_socket);
+#if defined(_WIN32)
         WSACleanup();
 #endif
-        return 1;
+        return -1;
     }
 
-    srand((unsigned int)time(NULL));
-    printf("Server UDP in ascolto sulla porta %s...\n", port);
+    printf("In attesa di richieste...\n");
 
-    for (;;) {
+    while (1) {
         struct sockaddr_in client_addr;
-        socklen_t addrlen = sizeof(client_addr);
-        unsigned char reqbuf[1 + CITY_NAME_LEN] = {0};
+        socklen_t client_len = sizeof(client_addr);
+        char recv_buffer[512];
 
-        ssize_t n = recvfrom(sockfd, (char*)reqbuf, sizeof(reqbuf), 0,
-                             (struct sockaddr*)&client_addr, &addrlen);
-        if (n <= 0) continue;
+        ssize_t bytes_read = recvfrom(server_socket, recv_buffer, sizeof(recv_buffer), 0,
+                                      (struct sockaddr*)&client_addr, &client_len);
+        if (bytes_read <= 0) continue;
 
-        char rtype = (char)reqbuf[0];
-        char city[CITY_NAME_LEN+1] = {0};
-        if (n > 1) {
-            size_t copy_len = (size_t)n - 1;
-            if (copy_len > CITY_NAME_LEN) copy_len = CITY_NAME_LEN;
-            memcpy(city, &reqbuf[1], copy_len);
+        char client_ip[INET_ADDRSTRLEN];
+        char client_host[NI_MAXHOST];
+
+        if (!inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN))
+            strcpy(client_ip, "IP non risolto");
+
+        if (getnameinfo((struct sockaddr*)&client_addr, client_len,
+                        client_host, sizeof(client_host), NULL, 0, 0) != 0) {
+            strcpy(client_host, client_ip);
         }
-        trim_inplace(city);
 
-        int type_ok = (rtype=='t'||rtype=='h'||rtype=='w'||rtype=='p');
-        int city_alpha = is_alpha_string(city);
-        int city_ok = 0;
-        for (size_t i = 0; i < supported_cities_count; i++)
-            if (ci_equal(city, supported_cities[i])) { city_ok = 1; break; }
+        weather_request_t req;
+        int offset = 0;
 
-        uint32_t status;
-        char resp_type = '\0';
-        float value = 0.0f;
+        if (bytes_read < (ssize_t)sizeof(char)) continue;
 
-        if (!type_ok || !city_alpha)
-            status = STATUS_INVALID_REQUEST;
-        else if (!city_ok)
-            status = STATUS_CITY_UNAVAILABLE;
-        else {
-            status = STATUS_SUCCESS;
-            resp_type = rtype;
-            switch (rtype) {
-                case 't': value = get_temperature(); break;
-                case 'h': value = get_humidity(); break;
-                case 'w': value = get_wind(); break;
-                case 'p': value = get_pressure(); break;
+        memcpy(&req.type, recv_buffer + offset, sizeof(char));
+        offset += sizeof(char);
+
+        int city_len = bytes_read - offset;
+        if (city_len > CITY_LEN) city_len = CITY_LEN;
+
+        memset(req.city, 0, CITY_LEN);
+        memcpy(req.city, recv_buffer + offset, city_len);
+        req.city[CITY_LEN - 1] = '\0';
+
+        printf("Richiesta ricevuta da %s (ip %s): type='%c', city='%s'\n",
+               client_host, client_ip, req.type, req.city);
+
+        weather_response_t resp;
+        memset(&resp, 0, sizeof(resp));
+        resp.type = req.type;
+
+        int valid_syntax = 1;
+        for (size_t k = 0; k < strlen(req.city); k++) {
+            char c = req.city[k];
+            if (c == '\t' || strchr("@#$%^&*()=<>[]{}\\|;:", c) != NULL) {
+                valid_syntax = 0;
+                break;
             }
         }
 
-        unsigned char respbuf[9] = {0};
-        uint32_t net_status = htonl(status);
-        memcpy(respbuf, &net_status, 4);
-        respbuf[4] = resp_type;
-        uint32_t value_u32;
-        memcpy(&value_u32, &value, sizeof(value_u32));
-        memcpy(&respbuf[5], &value_u32, 4);
+        if (!valid_syntax) {
+            resp.status = 2;
+        } else if (!is_city_valid(req.city)) {
+            resp.status = 1;
+        } else if (strchr("thwp", req.type) == NULL) {
+            resp.status = 2;
+        } else {
+            resp.status = 0;
+            if (req.type == 't') resp.value = get_temperature();
+            else if (req.type == 'h') resp.value = get_humidity();
+            else if (req.type == 'w') resp.value = get_wind();
+            else if (req.type == 'p') resp.value = get_pressure();
+        }
 
-        sendto(sockfd, (char*)respbuf, sizeof(respbuf), 0,
-               (struct sockaddr*)&client_addr, addrlen);
+        char send_buffer[sizeof(uint32_t) + sizeof(char) + sizeof(float)];
+        offset = 0;
+
+        uint32_t net_status = htonl(resp.status);
+        memcpy(send_buffer + offset, &net_status, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        memcpy(send_buffer + offset, &resp.type, sizeof(char));
+        offset += sizeof(char);
+
+        uint32_t net_value;
+        memcpy(&net_value, &resp.value, sizeof(float));
+        net_value = htonl(net_value);
+        memcpy(send_buffer + offset, &net_value, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        sendto(server_socket, send_buffer, offset, 0,
+               (struct sockaddr*)&client_addr, client_len);
     }
 
-    CLOSESOCK(sockfd);
-#ifdef _WIN32
+    close(server_socket);
+#if defined(_WIN32)
     WSACleanup();
 #endif
+
     return 0;
 }

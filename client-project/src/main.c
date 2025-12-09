@@ -37,9 +37,9 @@
   #define CLOSESOCK(s) close(s)
 #endif
 
-#define DEFAULT_PORT "12345"
-#define CITY_NAME_LEN 32
+#include "protocol.h"
 
+/* Città supportate */
 static const char* supported_cities[] = {
     "Bari","Roma","Milano","Napoli","Torino","Palermo",
     "Genova","Bologna","Firenze","Venezia"
@@ -47,6 +47,7 @@ static const char* supported_cities[] = {
 static const size_t supported_cities_count =
     sizeof(supported_cities)/sizeof(supported_cities[0]);
 
+/* Confronto case-insensitive */
 static int ci_equal(const char* a, const char* b) {
     for (; *a && *b; a++, b++) {
         if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
@@ -55,10 +56,25 @@ static int ci_equal(const char* a, const char* b) {
     return *a == *b;
 }
 
+/* Trim come nel server */
+static void trim_inplace(char* s) {
+    char *p = s;
+    while (*p == ' ') p++;
+    if (p != s) memmove(s, p, strlen(p)+1);
+
+    size_t len = strlen(s);
+    while (len > 0 && s[len-1] == ' ') {
+        s[len-1] = '\0';
+        len--;
+    }
+}
+
+/* Validazione città come quella del server (lettere + spazi) */
 static int is_valid_city(const char* s) {
     if (!s || !*s) return 0;
     for (; *s; s++) {
-        if (!isalpha((unsigned char)*s)) return 0;
+        if (!isalpha((unsigned char)*s) && *s != ' ')
+            return 0;
     }
     return 1;
 }
@@ -68,7 +84,7 @@ int main(int argc, char* argv[]) {
     const char* port = DEFAULT_PORT;
     const char* request = NULL;
 
-    /* Parsing argomenti FIXATO per i test */
+    /* Parsing argomenti */
     if (argc == 1) {
         request = NULL;
     }
@@ -80,7 +96,6 @@ int main(int argc, char* argv[]) {
         request = argv[3];
     }
     else {
-        /* Argomenti non previsti */
         fprintf(stderr, "Richiesta non valida\n");
         return 0;
     }
@@ -118,7 +133,10 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    /* Controllo caratteri validi nella città */
+    /* Trim come il server */
+    trim_inplace(city);
+
+    /* Controllo caratteri validi nella città (lettere + spazi) */
     if (!is_valid_city(city)) {
         printf("Richiesta non valida\n");
         return 0;
@@ -137,7 +155,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    /* Socket */
+    /* Creazione socket */
     sock_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd == INVALID_SOCKET) {
         perror("socket");
@@ -174,5 +192,6 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     WSACleanup();
 #endif
+
     return 0;
 }
